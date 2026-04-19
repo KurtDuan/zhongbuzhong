@@ -1,77 +1,5 @@
-const http = require("http");
-const fs = require("fs");
-const path = require("path");
-
-const root = __dirname;
-const host = "0.0.0.0";
-const port = 4173;
-
-const mime = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".svg": "image/svg+xml",
-  ".ico": "image/x-icon"
-};
-
-function loadDotEnv() {
-  const envPath = path.join(root, ".env");
-  if (!fs.existsSync(envPath)) {
-    return;
-  }
-
-  const content = fs.readFileSync(envPath, "utf8");
-  for (const rawLine of content.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) {
-      continue;
-    }
-
-    const equalIndex = line.indexOf("=");
-    if (equalIndex === -1) {
-      continue;
-    }
-
-    const key = line.slice(0, equalIndex).trim();
-    let value = line.slice(equalIndex + 1).trim();
-
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-
-    if (!process.env[key]) {
-      process.env[key] = value;
-    }
-  }
-}
-
-loadDotEnv();
-
 function sendJson(res, statusCode, payload) {
-  res.statusCode = statusCode;
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.end(JSON.stringify(payload));
-}
-
-function readRequestBody(req) {
-  return new Promise((resolve, reject) => {
-    let body = "";
-
-    req.on("data", (chunk) => {
-      body += chunk;
-      if (body.length > 1_000_000) {
-        reject(new Error("请求内容过大"));
-        req.destroy();
-      }
-    });
-
-    req.on("end", () => resolve(body));
-    req.on("error", reject);
-  });
+  res.status(statusCode).json(payload);
 }
 
 async function analyzeMedicine(medicine) {
@@ -147,11 +75,14 @@ async function analyzeMedicine(medicine) {
   };
 }
 
-async function handleApi(req, res) {
+module.exports = async function handler(req, res) {
+  if (req.method !== "POST") {
+    sendJson(res, 405, { error: "Method Not Allowed" });
+    return;
+  }
+
   try {
-    const bodyText = await readRequestBody(req);
-    const body = bodyText ? JSON.parse(bodyText) : {};
-    const medicine = String(body.medicine || "").trim();
+    const medicine = String(req.body?.medicine || "").trim();
 
     if (!medicine) {
       sendJson(res, 400, { error: "请输入药名、成分或宣传内容。" });
@@ -162,52 +93,6 @@ async function handleApi(req, res) {
     sendJson(res, 200, result);
   } catch (error) {
     const message = error instanceof Error ? error.message : "服务异常";
-    const statusCode = message.includes("DEEPSEEK_API_KEY") ? 500 : 500;
-    sendJson(res, statusCode, { error: message });
+    sendJson(res, 500, { error: message });
   }
-}
-
-function handleStatic(req, res) {
-  const cleanPath = decodeURIComponent((req.url || "/").split("?")[0]);
-  const relativePath = cleanPath === "/" ? "index.html" : cleanPath.replace(/^\/+/, "");
-  const filePath = path.join(root, relativePath);
-
-  if (!filePath.startsWith(root)) {
-    res.statusCode = 403;
-    res.end("Forbidden");
-    return;
-  }
-
-  fs.readFile(filePath, (err, data) => {
-    if (err) {
-      res.statusCode = 404;
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.end("Not found");
-      return;
-    }
-
-    res.statusCode = 200;
-    res.setHeader("Content-Type", mime[path.extname(filePath).toLowerCase()] || "application/octet-stream");
-    res.end(data);
-  });
-}
-
-const server = http.createServer((req, res) => {
-  if (req.method === "POST" && req.url === "/api/analyze") {
-    handleApi(req, res);
-    return;
-  }
-
-  if (req.method === "GET" || req.method === "HEAD") {
-    handleStatic(req, res);
-    return;
-  }
-
-  res.statusCode = 405;
-  res.setHeader("Content-Type", "text/plain; charset=utf-8");
-  res.end("Method Not Allowed");
-});
-
-server.listen(port, host, () => {
-  console.log(`Local server running at http://${host}:${port}`);
-});
+};
